@@ -1,11 +1,11 @@
 syntax on
 set nocompatible ruler laststatus=2 showcmd showmode number
 set incsearch ignorecase smartcase hlsearch wildmenu cmdheight=2 
-set background=dark showmatch shiftwidth=2 tabstop=2 
+set background=dark showmatch shiftwidth=2 tabstop=2 t_Co=256
 
 " Pathogen
 call pathogen#infect()
-
+colorscheme bocau
 " Setup Vundle
 filetype off
 set rtp+=~/.vim/bundle/Vundle.vim
@@ -17,6 +17,7 @@ Plugin 'scrooloose/syntastic' " Syntax checking
 Plugin 'marijnh/tern_for_vim' " Javascript code completion
 Plugin 'jelera/vim-javascript-syntax' " Better JS Syntax
 Plugin 'tomtom/tcomment_vim' " comment out shortcut
+Plugin 'flazz/vim-colorschemes' " A bunch of color schemes
 call vundle#end()
 filetype plugin indent on
 " ------------------
@@ -24,9 +25,10 @@ filetype plugin indent on
 let mapleader=","
 let g:syntastic_check_on_open=1
 let g:syntastic_aggregate_errors=1
+let g:ycm_global_ycm_extra_conf='~/.ycm_global_ycm_extra_conf.py'
 
 " Status line
-set statusline=\ %{HasPaste()}%F%m%r%h\ %w\ \ CWD:\ %r%{getcwd()}%h\ \ \ Line:\ %l
+set statusline=\ %{HasPaste()}%F%m%r%h\ %w\ \ CWD:\ %r%{getcwd()}%h\ \ \ Line:\ %l\ \ \ 
 " Returns true if paste mode is enabled
 function! HasPaste()
     if &paste
