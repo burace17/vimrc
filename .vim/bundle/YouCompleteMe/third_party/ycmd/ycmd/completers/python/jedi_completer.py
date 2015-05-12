@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with YouCompleteMe.  If not, see <http://www.gnu.org/licenses/>.
 
+from ycmd.utils import ToUtf8IfNeeded
 from ycmd.completers.completer import Completer
 from ycmd import responses
 
@@ -58,9 +59,9 @@ class JediCompleter( Completer ):
   def ComputeCandidatesInner( self, request_data ):
     script = self._GetJediScript( request_data )
     return [ responses.BuildCompletionData(
-                str( completion.name ),
-                str( completion.description ),
-                str( completion.doc ) )
+                ToUtf8IfNeeded( completion.name ),
+                ToUtf8IfNeeded( completion.description ),
+                ToUtf8IfNeeded( completion.docstring() ) )
              for completion in script.completions() ]
 
   def DefinedSubcommands( self ):
@@ -113,9 +114,9 @@ class JediCompleter( Completer ):
     script = self._GetJediScript( request_data )
     try:
       if declaration:
-        definitions = script.goto_definitions()
-      else:
         definitions = script.goto_assignments()
+      else:
+        definitions = script.goto_definitions()
     except jedi.NotFoundError:
       raise RuntimeError(
                   'Cannot follow nothing. Put your cursor on a valid name.' )

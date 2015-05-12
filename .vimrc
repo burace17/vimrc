@@ -5,12 +5,12 @@ set background=dark showmatch shiftwidth=2 tabstop=2 t_Co=256
 
 " Pathogen
 call pathogen#infect()
-colorscheme bocau
+colorscheme badwolf
 " Setup Vundle
 filetype off
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
-Plugin 'wting/rust.vim' " Rust syntax highlighting
+Plugin 'gmarik/Vundle.vim'
 Plugin 'Valloric/YouCompleteMe' " Code completion for C, Python, C#..
 Plugin 'Raimondi/delimitMate' " Automatically close quotes, parens, brackets, etc.
 Plugin 'scrooloose/syntastic' " Syntax checking
@@ -18,6 +18,7 @@ Plugin 'marijnh/tern_for_vim' " Javascript code completion
 Plugin 'jelera/vim-javascript-syntax' " Better JS Syntax
 Plugin 'tomtom/tcomment_vim' " comment out shortcut
 Plugin 'flazz/vim-colorschemes' " A bunch of color schemes
+Plugin 'zah/nimrod.vim' " Syntax highlighting for nim
 call vundle#end()
 filetype plugin indent on
 " ------------------
@@ -36,6 +37,19 @@ function! HasPaste()
     en
     return ''
 endfunction
+
+" Stuff for nim syntax highlighting
+fun! JumpToDef()
+	if exists("*GotoDefinition_" . &filetype)
+		call GotoDefinition_{&filetype}()
+	else
+		exe "norm! \<C-]>"
+	endif
+endf
+
+nn <M-g> :call JumpToDef()<cr>
+ino <M-g> <esc>:call JumpToDef()<cr>i
+" end 
 
 " Drag visuals plugin
 runtime plugin/dragvisuals.vim

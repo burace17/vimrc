@@ -37,7 +37,15 @@ namespace {
 
 unsigned editingOptions() {
   return CXTranslationUnit_DetailedPreprocessingRecord |
-      clang_defaultEditingTranslationUnitOptions();
+         CXTranslationUnit_Incomplete |
+         CXTranslationUnit_IncludeBriefCommentsInCodeCompletion |
+         clang_defaultEditingTranslationUnitOptions();
+}
+
+
+unsigned completionOptions() {
+  return clang_defaultCodeCompleteOptions() |
+         CXCodeComplete_IncludeBriefComments;
 }
 
 }  // unnamed namespace
@@ -60,7 +68,7 @@ TranslationUnit::TranslationUnit(
   std::vector< const char * > pointer_flags;
   pointer_flags.reserve( flags.size() );
 
-  foreach ( const std::string & flag, flags ) {
+  foreach ( const std::string &flag, flags ) {
     pointer_flags.push_back( flag.c_str() );
   }
 
@@ -175,7 +183,7 @@ std::vector< CompletionData > TranslationUnit::CandidatesForLocation(
                           column,
                           const_cast<CXUnsavedFile *>( unsaved ),
                           cxunsaved_files.size(),
-                          clang_defaultCodeCompleteOptions() ),
+                          completionOptions() ),
     clang_disposeCodeCompleteResults );
 
   std::vector< CompletionData > candidates = ToCompletionDataVector(
@@ -188,8 +196,9 @@ Location TranslationUnit::GetDeclarationLocation(
   int column,
   const std::vector< UnsavedFile > &unsaved_files,
   bool reparse ) {
-  if (reparse)
+  if ( reparse )
     ReparseForIndexing( unsaved_files );
+
   unique_lock< mutex > lock( clang_access_mutex_ );
 
   if ( !clang_translation_unit_ )
@@ -213,8 +222,9 @@ Location TranslationUnit::GetDefinitionLocation(
   int column,
   const std::vector< UnsavedFile > &unsaved_files,
   bool reparse ) {
-  if (reparse)
+  if ( reparse )
     ReparseForIndexing( unsaved_files );
+
   unique_lock< mutex > lock( clang_access_mutex_ );
 
   if ( !clang_translation_unit_ )
@@ -233,6 +243,92 @@ Location TranslationUnit::GetDefinitionLocation(
   return Location( clang_getCursorLocation( definition_cursor ) );
 }
 
+std::string TranslationUnit::GetTypeAtLocation(
+  int line,
+  int column,
+  const std::vector< UnsavedFile > &unsaved_files,
+  bool reparse ) {
+
+  if (reparse)
+    ReparseForIndexing( unsaved_files );
+
+  unique_lock< mutex > lock( clang_access_mutex_ );
+
+  if ( !clang_translation_unit_ )
+    return "Internal error: no translation unit";
+
+  CXCursor cursor = GetCursor( line, column );
+
+  if ( !CursorIsValid( cursor ) )
+    return "Internal error: cursor not valid";
+
+  CXType type = clang_getCursorType( cursor );
+
+  std::string type_description =
+                        CXStringToString( clang_getTypeSpelling( type ) );
+
+  if ( type_description.empty() )
+    return "Unknown type";
+
+  // We have a choice here; libClang provides clang_getCanonicalType which will
+  // return the "underlying" type for the type returned by clang_getCursorType
+  // e.g. for a typedef
+  //     type = clang_getCanonicalType( type );
+  //
+  // Without the above, something like the following would return "MyType"
+  // rather than int:
+  //     typedef int MyType;
+  //     MyType i = 100; <-- type = MyType, canonical type = int
+  //
+  // There is probably more semantic value in calling it MyType. Indeed, if we
+  // opt for the more specific type, we can get very long or
+  // confusing STL types even for simple usage. e.g. the following:
+  //     std::string test = "test"; <-- type = std::string;
+  //                                    canonical type = std::basic_string<char>
+  //
+  // So as a compromise, we return both if and only if the types differ, like
+  //     std::string => std::basic_string<char>
+
+  CXType canonical_type = clang_getCanonicalType( type );
+
+  if ( !clang_equalTypes( type, canonical_type ) )
+  {
+    type_description += " => ";
+    type_description += CXStringToString(clang_getTypeSpelling(canonical_type));
+  }
+
+  return type_description;
+}
+
+std::string TranslationUnit::GetEnclosingFunctionAtLocation(
+  int line,
+  int column,
+  const std::vector< UnsavedFile > &unsaved_files,
+  bool reparse ) {
+
+  if (reparse)
+    ReparseForIndexing( unsaved_files );
+
+  unique_lock< mutex > lock( clang_access_mutex_ );
+
+  if ( !clang_translation_unit_ )
+    return "Internal error: no translation unit";
+
+  CXCursor cursor = GetCursor( line, column );
+
+  if ( !CursorIsValid( cursor ) )
+    return "Internal error: cursor not valid";
+
+  CXCursor parent = clang_getCursorSemanticParent( cursor );
+
+  std::string parent_str =
+                  CXStringToString( clang_getCursorDisplayName( parent ) );
+
+  if (parent_str.empty())
+    return "Unknown semantic parent";
+
+  return parent_str;
+}
 
 // Argument taken as non-const ref because we need to be able to pass a
 // non-const pointer to clang. This function (and clang too) will not modify the

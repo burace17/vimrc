@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 #
 # Copyright (C) 2013  Google Inc.
 #
@@ -26,7 +27,8 @@ from .test_utils import ( Setup, BuildRequest, PathToTestFile,
 from webtest import TestApp, AppError
 from nose.tools import eq_, with_setup
 from hamcrest import ( assert_that, has_item, has_items, has_entry,
-                       contains_inanyorder, empty, greater_than )
+                       contains_inanyorder, empty, greater_than,
+                       contains_string )
 from ..responses import ( BuildCompletionData, UnknownExtraConf,
                           NoExtraConfDetected )
 from .. import handlers
@@ -115,6 +117,34 @@ def GetCompletions_CsCompleter_Works_test():
   app.post_json( '/ignore_extra_conf_file',
                  { 'filepath': PathToTestFile( '.ycm_extra_conf.py' ) } )
   filepath = PathToTestFile( 'testy/Program.cs' )
+  contents = open( filepath ).read()
+  event_data = BuildRequest( filepath = filepath,
+                             filetype = 'cs',
+                             contents = contents,
+                             event_name = 'FileReadyToParse' )
+
+  app.post_json( '/event_notification', event_data )
+  WaitUntilOmniSharpServerReady( app )
+
+  completion_data = BuildRequest( filepath = filepath,
+                                  filetype = 'cs',
+                                  contents = contents,
+                                  line_num = 10,
+                                  column_num = 12 )
+  response_data = app.post_json( '/completions', completion_data ).json
+  assert_that( response_data[ 'completions' ],
+               has_items( CompletionEntryMatcher( 'CursorLeft' ),
+                          CompletionEntryMatcher( 'CursorSize' ) ) )
+  eq_( 12, response_data[ 'completion_start_column' ] )
+
+  StopOmniSharpServer( app )
+
+@with_setup( Setup )
+def GetCompletions_CsCompleter_PathWithSpace_test():
+  app = TestApp( handlers.app )
+  app.post_json( '/ignore_extra_conf_file',
+                 { 'filepath': PathToTestFile( '.ycm_extra_conf.py' ) } )
+  filepath = PathToTestFile( 'неприличное слово/Program.cs' )
   contents = open( filepath ).read()
   event_data = BuildRequest( filepath = filepath,
                              filetype = 'cs',
@@ -633,3 +663,56 @@ def GetCompletions_UltiSnipsCompleter_UnusedWhenOffWithOption_test():
 
   eq_( [],
        app.post_json( '/completions', completion_data ).json[ 'completions' ] )
+
+
+@with_setup( Setup )
+def GetCompletions_JediCompleter_Basic_test():
+  app = TestApp( handlers.app )
+  filepath = PathToTestFile( 'basic.py' )
+  completion_data = BuildRequest( filepath = filepath,
+                                  filetype = 'python',
+                                  contents = open( filepath ).read(),
+                                  line_num = 7,
+                                  column_num = 3)
+
+  results = app.post_json( '/completions',
+                           completion_data ).json[ 'completions' ]
+  assert_that( results, has_items( CompletionEntryMatcher( 'a' ),
+                                   CompletionEntryMatcher( 'b' ) ) )
+
+
+@with_setup( Setup )
+def GetCompletions_JediCompleter_UnicodeDescription_test():
+  app = TestApp( handlers.app )
+  filepath = PathToTestFile( 'unicode.py' )
+  completion_data = BuildRequest( filepath = filepath,
+                                  filetype = 'python',
+                                  contents = open( filepath ).read(),
+                                  force_semantic = True,
+                                  line_num = 5,
+                                  column_num = 3)
+
+  results = app.post_json( '/completions',
+                           completion_data ).json[ 'completions' ]
+  print results
+  assert_that( results, has_item(
+                          has_entry( 'detailed_info',
+                            contains_string( u'aafäö' ) ) ) )
+
+
+@with_setup( Setup )
+def GetCompletions_GoCodeCompleter_test():
+  app = TestApp( handlers.app )
+  filepath = PathToTestFile( 'test.go' )
+  completion_data = BuildRequest( filepath = filepath,
+                                  filetype = 'go',
+                                  contents = open( filepath ).read(),
+                                  force_semantic = True,
+                                  line_num = 9,
+                                  column_num = 11)
+
+  results = app.post_json( '/completions',
+                           completion_data ).json[ 'completions' ]
+  assert_that( results, has_item(
+                          has_entry( 'insertion_text',
+                            contains_string( u'Logger' ) ) ) )

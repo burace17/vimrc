@@ -23,6 +23,9 @@ set( SERVER_LIB "ycm_core" )
 
 set( Python_ADDITIONAL_VERSIONS 2.7 2.6 )
 find_package( PythonLibs 2.6 REQUIRED )
+# The version of PythonInterp controls the version of boost.python which
+# is pulled in later, otherwise the highest python version is used
+find_package( PythonInterp 2.6 REQUIRED )
 
 if ( NOT PYTHONLIBS_VERSION_STRING VERSION_LESS "3.0.0" )
   message( FATAL_ERROR
@@ -42,22 +45,22 @@ if ( USE_CLANG_COMPLETER AND
      NOT EXTERNAL_LIBCLANG_PATH )
   message( "Downloading Clang 3.5" )
 
-  set( CLANG_URL "http://llvm.org/releases/3.5.0" )
+  set( CLANG_URL "http://llvm.org/releases/3.6.0" )
 
   if ( APPLE )
-    set( CLANG_DIRNAME "clang+llvm-3.5.0-macosx-apple-darwin" )
-    set( CLANG_MD5 "e580c8b8c64ca5442ac15a4343447500" )
+    set( CLANG_DIRNAME "clang+llvm-3.6.0-x86_64-apple-darwin" )
+    set( CLANG_MD5 "103e06006c88d391c9c369a4671e3363" )
     set( CLANG_FILENAME "${CLANG_DIRNAME}.tar.xz" )
   else()
     if ( 64_BIT_PLATFORM )
-      set( CLANG_DIRNAME "clang+llvm-3.5.0-x86_64-linux-gnu-ubuntu-14.04" )
-      set( CLANG_MD5 "904e96e6f51e57b58de546a7324910c3" )
+      set( CLANG_DIRNAME "clang+llvm-3.6.0-x86_64-linux-gnu-ubuntu-14.04" )
+      set( CLANG_MD5 "cfb2ebc01573e666770b9c5f72deb04e" )
       set( CLANG_FILENAME "${CLANG_DIRNAME}.tar.xz" )
     else()
       # Clang 3.3 is the last version with pre-built x86 binaries upstream.
       # That's too old now.
-      message( FATAL_ERROR "No pre-built Clang 3.5 binaries for 32 bit linux. "
-        "You'll have to compile Clang 3.5 from source. "
+      message( FATAL_ERROR "No pre-built Clang 3.6 binaries for 32 bit linux. "
+        "You'll have to compile Clang 3.6 from source. "
         "See the YCM docs for details on how to use a user-compiled libclang." )
     endif()
   endif()
@@ -212,7 +215,7 @@ if ( EXTERNAL_LIBCLANG_PATH OR USE_SYSTEM_LIBCLANG )
                   /usr/lib
                   /usr/lib/llvm
                   ${SYS_LLVM_PATHS}
-                  /Library/Developer/CommandLineTools/usr/lib,
+                  /Library/Developer/CommandLineTools/usr/lib
                   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib )
     set( EXTERNAL_LIBCLANG_PATH ${TEMP} )
   else()
@@ -236,8 +239,8 @@ if ( EXTRA_RPATH )
   set( CMAKE_INSTALL_RPATH "${EXTRA_RPATH}:${CMAKE_INSTALL_RPATH}" )
 endif()
 
-# Needed on Linux machines, but not on Macs
-if ( UNIX AND NOT APPLE )
+# Needed on Linux machines, but not on Macs and OpenBSD
+if ( UNIX AND NOT ( APPLE OR SYSTEM_IS_OPENBSD ) )
   set( EXTRA_LIBS rt )
 endif()
 
@@ -305,10 +308,18 @@ add_custom_target( ${PROJECT_NAME}
 # @rpath/libclang.dylib in the final ycm_core.so. If we use the
 # @rpath version, then it may load the system libclang which the user
 # explicitely does not want (otherwise the user would specify
-# USE_SYSTEM_LIBCLANG). With @loader_path, we make sure that only the
-# libclang.dylib present in the same directory as our ycm_core.so
-# is used.
+# USE_SYSTEM_LIBCLANG). If we hardcode with `@loader_path/libclang.dylib`,
+# it guarantees to search `@loader_path` for libclang.dylib first and use it
+# only. So with `@loader_path`, we make sure that only the libclang.dylib
+# present in the same directory as our ycm_core.so is used.
+# And the extra `rpath` is helpful to find libclang.dylib's dependencies
+# if it is built with `--enable-shared` flag.
 if ( EXTERNAL_LIBCLANG_PATH AND APPLE )
+  get_filename_component(EXTRA_LIB_PATH ${EXTERNAL_LIBCLANG_PATH} DIRECTORY)
+
+  set_target_properties(${SERVER_LIB}
+    PROPERTIES LINK_FLAGS "-Wl,-rpath,${EXTRA_LIB_PATH}")
+
   add_custom_command( TARGET ${SERVER_LIB}
                       POST_BUILD
                       COMMAND install_name_tool
@@ -391,6 +402,10 @@ endif()
 if( SYSTEM_IS_SUNOS )
   # SunOS needs this setting for thread support
   set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthreads" )
+endif()
+
+if( SYSTEM_IS_OPENBSD OR SYSTEM_IS_FREEBSD )
+  set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread" )
 endif()
 
 add_subdirectory( tests )
