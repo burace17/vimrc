@@ -1,7 +1,7 @@
 syntax on
 set nocompatible ruler laststatus=2 showcmd showmode number
 set incsearch ignorecase smartcase hlsearch wildmenu cmdheight=2 
-set background=dark showmatch shiftwidth=2 tabstop=2 t_Co=256
+set background=dark showmatch shiftwidth=2 tabstop=4 t_Co=256
 
 " Pathogen
 call pathogen#infect()
@@ -11,14 +11,13 @@ filetype off
 set rtp+=~/.vim/bundle/Vundle.vim
 call vundle#begin()
 Plugin 'gmarik/Vundle.vim'
-Plugin 'Valloric/YouCompleteMe' " Code completion for C, Python, C#..
 Plugin 'Raimondi/delimitMate' " Automatically close quotes, parens, brackets, etc.
 Plugin 'scrooloose/syntastic' " Syntax checking
-Plugin 'marijnh/tern_for_vim' " Javascript code completion
 Plugin 'jelera/vim-javascript-syntax' " Better JS Syntax
 Plugin 'tomtom/tcomment_vim' " comment out shortcut
 Plugin 'flazz/vim-colorschemes' " A bunch of color schemes
 Plugin 'zah/nimrod.vim' " Syntax highlighting for nim
+Plugin 'Valloric/YouCompleteMe'
 call vundle#end()
 filetype plugin indent on
 " ------------------
