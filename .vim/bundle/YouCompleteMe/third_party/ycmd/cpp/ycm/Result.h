@@ -24,11 +24,11 @@ namespace YouCompleteMe {
 
 class Result {
 public:
-  Result();
-  explicit Result( bool is_subsequence );
+  explicit Result( bool is_subsequence = false );
 
   Result( bool is_subsequence,
           const std::string *text,
+          const std::string *case_swapped_text,
           bool text_is_lowercase,
           int char_match_index_sum,
           const std::string &word_boundary_chars,
@@ -48,6 +48,9 @@ private:
   void SetResultFeaturesFromQuery(
     const std::string &query,
     const std::string &word_boundary_chars );
+
+  bool QueryIsPrefix( const std::string &text,
+                      const std::string &query );
 
   // true when the query for which the result was created was an empty string;
   // in these cases we just use a lexicographic comparison
@@ -83,6 +86,10 @@ private:
 
   // points to the full candidate text
   const std::string *text_;
+
+  // like text_ but with lowercase letters converted to uppercase and vice
+  // versa.
+  const std::string *case_swapped_text_;
 
 };
 

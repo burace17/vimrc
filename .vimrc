@@ -1,7 +1,8 @@
 syntax on
 set nocompatible ruler laststatus=2 showcmd showmode number
 set incsearch ignorecase smartcase hlsearch wildmenu cmdheight=2 
-set background=dark showmatch shiftwidth=2 tabstop=4 t_Co=256
+set background=dark showmatch shiftwidth=4 tabstop=4 t_Co=256
+set guifont=Monospace\ 12
 
 " Pathogen
 call pathogen#infect()
@@ -18,6 +19,7 @@ Plugin 'tomtom/tcomment_vim' " comment out shortcut
 Plugin 'flazz/vim-colorschemes' " A bunch of color schemes
 Plugin 'zah/nimrod.vim' " Syntax highlighting for nim
 Plugin 'Valloric/YouCompleteMe'
+Plugin 'wlangstroth/vim-racket'
 call vundle#end()
 filetype plugin indent on
 " ------------------
@@ -25,7 +27,9 @@ filetype plugin indent on
 let mapleader=","
 let g:syntastic_check_on_open=1
 let g:syntastic_aggregate_errors=1
+let g:syntastic_enable_racket_racket_checker=1
 let g:ycm_global_ycm_extra_conf='~/.ycm_global_ycm_extra_conf.py'
+let g:EclimCompletionMethod = 'omnifunc'
 
 " Status line
 set statusline=\ %{HasPaste()}%F%m%r%h\ %w\ \ CWD:\ %r%{getcwd()}%h\ \ \ Line:\ %l\ \ \ 

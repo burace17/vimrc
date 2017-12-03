@@ -28,12 +28,19 @@ using ::testing::WhenSorted;
 namespace YouCompleteMe {
 
 
-// This differs from what we expect from the ClangCompleter. That one should
-// return results for an empty query.
-TEST( IdentifierCompleterTest, EmptyQueryNoResults ) {
+TEST( IdentifierCompleterTest, SortOnEmptyQuery ) {
   EXPECT_THAT( IdentifierCompleter(
                  StringVector(
-                   "foobar" ) ).CandidatesForQuery( "" ),
+                   "foo",
+                   "bar" ) ).CandidatesForQuery( "" ),
+               ElementsAre( "bar",
+                            "foo" ) );
+}
+
+TEST( IdentifierCompleterTest, IgnoreEmptyCandidate ) {
+  EXPECT_THAT( IdentifierCompleter(
+                 StringVector(
+                   "" ) ).CandidatesForQuery( "" ),
                IsEmpty() );
 }
 
@@ -285,6 +292,31 @@ TEST( IdentifierCompleterTest, EmptyCandidatesForNonPrintable ) {
 }
 
 
+TEST( IdentifierCompleterTest, LotOfCandidates ) {
+  // Generate a lot of candidates of the form [a-z]{5} in reverse order.
+  std::vector< std::string > candidates;
+  for ( int i = 0; i < 2048; ++i ) {
+    std::string candidate = "";
+    int letter = i;
+    for ( int pos = 0; pos < 5; letter /= 26, ++pos ) {
+      candidate = std::string( 1, letter % 26 + 'a' ) + candidate;
+    }
+    candidates.insert( candidates.begin(), candidate );
+  }
+
+  IdentifierCompleter completer( candidates );
+
+  std::reverse( candidates.begin(), candidates.end() );
+
+  EXPECT_THAT( completer.CandidatesForQuery( "aa" ),
+               candidates );
+
+  EXPECT_THAT( completer.CandidatesForQuery( "aa", 2 ),
+               ElementsAre( "aaaaa",
+                            "aaaab" ) );
+}
+
+
 TEST( IdentifierCompleterTest, TagsEndToEndWorks ) {
   IdentifierCompleter completer;
   std::vector< std::string > tag_files;
@@ -298,7 +330,34 @@ TEST( IdentifierCompleterTest, TagsEndToEndWorks ) {
 
 }
 
-// TODO: tests for filepath and filetype candidate storing
+
+// Filetype checking
+TEST( IdentifierCompleterTest, ManyCandidateSimpleFileType ) {
+  IdentifierCompleter completer;
+  EXPECT_THAT( IdentifierCompleter(
+                 StringVector(
+                   "foobar",
+                   "foobartest",
+                   "Foobartest" ),
+                 std::string( "c" ),
+                 std::string( "foo" ) ).CandidatesForQueryAndType( "fbr", "c" ),
+               WhenSorted( ElementsAre( "Foobartest",
+                                        "foobar",
+                                        "foobartest" ) ) );
+}
+
+
+TEST( IdentifierCompleterTest, ManyCandidateSimpleWrongFileType ) {
+  IdentifierCompleter completer;
+  EXPECT_THAT( IdentifierCompleter(
+                 StringVector(
+                   "foobar",
+                   "foobartest",
+                   "Foobartest" ),
+                 std::string( "c" ),
+                 std::string( "foo" ) ).CandidatesForQueryAndType( "fbr", "cpp" ),
+               IsEmpty() );
+}
 
 } // namespace YouCompleteMe
 

@@ -1,4 +1,5 @@
-# Copyright (C) 2011, 2012 Google Inc.
+# Copyright (C) 2011-2012 Google Inc.
+#               2017      ycmd contributors
 #
 # This file is part of ycmd.
 #
@@ -19,26 +20,28 @@ from __future__ import unicode_literals
 from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
-from future import standard_library
-standard_library.install_aliases()
+# Not installing aliases from python-future; it's unreliable and slow.
 from builtins import *  # noqa
-from future.utils import iteritems
 
 from collections import defaultdict
-import ycm_core
-import re
+from future.utils import iteritems
+import logging
 import os.path
+import re
 import textwrap
+import xml.etree.ElementTree
+
+import ycm_core
 from ycmd import responses
-from ycmd import extra_conf_store
 from ycmd.utils import ToCppStringCompatible, ToUnicode
 from ycmd.completers.completer import Completer
-from ycmd.completers.completer_utils import GetIncludeStatementValue
-from ycmd.completers.cpp.flags import Flags, PrepareFlagsForClang
+from ycmd.completers.cpp.flags import ( Flags, PrepareFlagsForClang,
+                                        NoCompilationDatabase,
+                                        UserIncludePaths )
 from ycmd.completers.cpp.ephemeral_values_set import EphemeralValuesSet
+from ycmd.completers.general.filename_completer import (
+    GenerateCandidatesForPaths )
 from ycmd.responses import NoExtraConfDetected, UnknownExtraConf
-
-import xml.etree.ElementTree
 
 CLANG_FILETYPES = set( [ 'c', 'cpp', 'objc', 'objcpp' ] )
 PARSING_FILE_MESSAGE = 'Still parsing file, no completions yet.'
@@ -49,6 +52,7 @@ NO_DIAGNOSTIC_MESSAGE = 'No diagnostic for current line!'
 PRAGMA_DIAG_TEXT_TO_IGNORE = '#pragma once in main file'
 TOO_MANY_ERRORS_DIAG_TEXT_TO_IGNORE = 'too many errors emitted, stopping now'
 NO_DOCUMENTATION_MESSAGE = 'No documentation available for current context'
+INCLUDE_REGEX = re.compile( '(\s*#\s*(?:include|import)\s*)(:?"[^"]*|<[^>]*)' )
 
 
 class ClangCompleter( Completer ):
@@ -60,6 +64,7 @@ class ClangCompleter( Completer ):
     self._flags = Flags()
     self._diagnostic_store = None
     self._files_being_compiled = EphemeralValuesSet()
+    self._logger = logging.getLogger( __name__ )
 
 
   def SupportedFiletypes( self ):
@@ -85,10 +90,61 @@ class ClangCompleter( Completer ):
     return files
 
 
+  def ShouldCompleteIncludeStatement( self, request_data ):
+    column_codepoint = request_data[ 'column_codepoint' ] - 1
+    current_line = request_data[ 'line_value' ]
+    return INCLUDE_REGEX.match( current_line[ : column_codepoint ] )
+
+
+  def ShouldUseNowInner( self, request_data ):
+    if self.ShouldCompleteIncludeStatement( request_data ):
+      return True
+    return super( ClangCompleter, self ).ShouldUseNowInner( request_data )
+
+
+  def GetIncludePaths( self, request_data ):
+    column_codepoint = request_data[ 'column_codepoint' ] - 1
+    current_line = request_data[ 'line_value' ]
+    line = current_line[ : column_codepoint ]
+    path_dir, quoted_include, start_codepoint = (
+        GetIncompleteIncludeValue( line ) )
+    if start_codepoint is None:
+      return None
+
+    request_data[ 'start_codepoint' ] = start_codepoint
+
+    # We do what GCC does for <> versus "":
+    # http://gcc.gnu.org/onlinedocs/cpp/Include-Syntax.html
+    flags = self._FlagsForRequest( request_data )
+    filepath = request_data[ 'filepath' ]
+    quoted_include_paths, include_paths = UserIncludePaths( flags, filepath )
+    if quoted_include:
+      include_paths.extend( quoted_include_paths )
+
+    paths = []
+    for include_path in include_paths:
+      unicode_path = ToUnicode( os.path.join( include_path, path_dir ) )
+      try:
+        # We need to pass a unicode string to get unicode strings out of
+        # listdir.
+        relative_paths = os.listdir( unicode_path )
+      except Exception:
+        self._logger.exception( 'Error while listing %s folder.', unicode_path )
+        relative_paths = []
+
+      paths.extend( os.path.join( include_path, path_dir, relative_path ) for
+                    relative_path in relative_paths  )
+    return paths
+
+
   def ComputeCandidatesInner( self, request_data ):
     filename = request_data[ 'filepath' ]
     if not filename:
       return
+
+    paths = self.GetIncludePaths( request_data )
+    if paths is not None:
+      return GenerateCandidatesForPaths( paths )
 
     if self._completer.UpdatingTranslationUnit(
         ToCppStringCompatible( filename ) ):
@@ -220,18 +276,18 @@ class ClangCompleter( Completer ):
 
   def _ResponseForInclude( self, request_data ):
     """Returns response for include file location if cursor is on the
-       include statement, None otherwise.
-       Throws RuntimeError if cursor is on include statement and corresponding
-       include file not found."""
+    include statement, None otherwise.
+    Throws RuntimeError if cursor is on include statement and corresponding
+    include file not found."""
     current_line = request_data[ 'line_value' ]
-    include_file_name, quoted_include = GetIncludeStatementValue( current_line )
+    include_file_name, quoted_include = GetFullIncludeValue( current_line )
     if not include_file_name:
       return None
 
+    flags = self._FlagsForRequest( request_data )
     current_file_path = request_data[ 'filepath' ]
-    client_data = request_data.get( 'extra_conf_data', None )
-    quoted_include_paths, include_paths = (
-            self._flags.UserIncludePaths( current_file_path, client_data ) )
+    quoted_include_paths, include_paths = UserIncludePaths( flags,
+                                                            current_file_path )
     if quoted_include:
       include_file_path = _GetAbsolutePath( include_file_name,
                                             quoted_include_paths )
@@ -338,7 +394,7 @@ class ClangCompleter( Completer ):
 
   def OnBufferUnload( self, request_data ):
     self._completer.DeleteCachesForFile(
-        ToCppStringCompatible( request_data[ 'unloaded_buffer' ] ) )
+        ToCppStringCompatible( request_data[ 'filepath' ] ) )
 
 
   def GetDetailedDiagnostic( self, request_data ):
@@ -370,25 +426,31 @@ class ClangCompleter( Completer ):
 
 
   def DebugInfo( self, request_data ):
-    filename = request_data[ 'filepath' ]
     try:
-      extra_conf = extra_conf_store.ModuleFileForSourceFile( filename )
+      # Note that it only raises NoExtraConfDetected:
+      #  - when extra_conf is None and,
+      #  - there is no compilation database
       flags = self._FlagsForRequest( request_data ) or []
-    except NoExtraConfDetected:
-      return ( 'C-family completer debug information:\n'
-               '  No configuration file found' )
-    except UnknownExtraConf as error:
-      return ( 'C-family completer debug information:\n'
-               '  Configuration file found but not loaded\n'
-               '  Configuration path: {0}'.format(
-                 error.extra_conf_file ) )
-    if not extra_conf:
-      return ( 'C-family completer debug information:\n'
-               '  No configuration file found' )
-    return ( 'C-family completer debug information:\n'
-             '  Configuration file found and loaded\n'
-             '  Configuration path: {0}\n'
-             '  Flags: {1}'.format( extra_conf, list( flags ) ) )
+    except ( NoExtraConfDetected, UnknownExtraConf ):
+      # If _FlagsForRequest returns None or raises, we use an empty list in
+      # practice.
+      flags = []
+
+    try:
+      database_directory = self._flags.FindCompilationDatabase(
+          os.path.dirname( request_data[ 'filepath' ] ) ).database_directory
+    except NoCompilationDatabase:
+      database_directory = None
+
+    database_item = responses.DebugInfoItem(
+      key = 'compilation database path',
+      value = '{0}'.format( database_directory ) )
+    flags_item = responses.DebugInfoItem(
+      key = 'flags', value = '{0}'.format( list( flags ) ) )
+
+    return responses.BuildDebugInfoResponse( name = 'C-family',
+                                             items = [ database_item,
+                                                       flags_item ] )
 
 
   def _FlagsForRequest( self, request_data ):
@@ -421,10 +483,6 @@ def DiagnosticsToDiagStructure( diagnostics ):
 
 def ClangAvailableForFiletypes( filetypes ):
   return any( [ filetype in CLANG_FILETYPES for filetype in filetypes ] )
-
-
-def InCFamilyFile( filetypes ):
-  return ClangAvailableForFiletypes( filetypes )
 
 
 def _FilterDiagnostics( diagnostics ):
@@ -517,3 +575,48 @@ def _GetAbsolutePath( include_file_name, include_paths ):
     if os.path.isfile( include_file_path ):
       return include_file_path
   return None
+
+
+def GetIncompleteIncludeValue( line ):
+  """Returns the tuple |include_value|, |quoted_include|, and |start_codepoint|
+  where:
+  - |include_value| is the string starting from the opening quote or bracket of
+    the include statement in |line|. None if no include statement is found;
+  - |quoted_include| is True if the statement is a quoted include, False
+    otherwise;
+  - |start_column| is the 1-based column where the completion should start (i.e.
+    at the last path separator '/' or at the opening quote or bracket). None if
+    no include statement is matched."""
+  match = INCLUDE_REGEX.match( line )
+  if not match:
+    return None, False, None
+
+  include_start = match.end( 1 ) + 1
+  quoted_include = ( line[ include_start - 1 ] == '"' )
+  separator_char = '/'
+  separator_char_pos = line.rfind( separator_char, match.end( 1 ) )
+  if separator_char_pos == -1:
+    return '', quoted_include, include_start + 1
+  return ( line[ include_start : separator_char_pos + 1 ],
+           quoted_include,
+           separator_char_pos + 2 )
+
+
+
+def GetFullIncludeValue( line ):
+  """Returns the tuple |include_value| and |quoted_include| where:
+  - |include_value| is the whole string inside the quotes or brackets of the
+    include statement in |line|. None if no include statement is found;
+  - |quoted_include| is True if the statement is a quoted include, False
+    otherwise."""
+  match = INCLUDE_REGEX.match( line )
+  if not match:
+    return None, False
+
+  include_start = match.end( 1 ) + 1
+  quoted_include = ( line[ include_start - 1 ] == '"' )
+  close_char = '"' if quoted_include else '>'
+  close_char_pos = line.find( close_char, match.end() )
+  if close_char_pos == -1:
+    return None, quoted_include
+  return line[ include_start : close_char_pos ], quoted_include

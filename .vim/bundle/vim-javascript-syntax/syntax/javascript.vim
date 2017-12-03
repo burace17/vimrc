@@ -34,8 +34,8 @@ syntax match shebang "^#!.*"
 hi link shebang Comment
 
 " Statement Keywords {{{
-syntax keyword javaScriptSource         import export
-syntax keyword javaScriptIdentifier     arguments this let var void yield
+syntax keyword javaScriptSource         import export from
+syntax keyword javaScriptIdentifier     arguments this let var void yield async await const
 syntax keyword javaScriptOperator       delete new instanceof typeof
 syntax keyword javaScriptBoolean        true false
 syntax keyword javaScriptNull           null undefined
@@ -50,10 +50,10 @@ syntax keyword javaScriptPrototype      prototype
 syntax keyword javaScriptStatement      return with
 syntax keyword javaScriptGlobalObjects  Array Boolean Date Function Math Number Object RegExp String
 syntax keyword javaScriptExceptions     try catch throw finally Error EvalError RangeError ReferenceError SyntaxError TypeError URIError
-syntax keyword javaScriptReserved       abstract enum int short boolean export interface static byte extends long super char final native synchronized class float package throws const goto private transient debugger implements protected volatile double import public
+syntax keyword javaScriptReserved       abstract enum int short boolean export interface static byte extends long super char final native synchronized class float package throws goto private transient debugger implements protected volatile double import public
 "}}}
 " Comments {{{
-syntax keyword javaScriptCommentTodo      TODO FIXME XXX TBD contained
+syntax keyword javaScriptCommentTodo      TODO FIXME XXX TBD OPTIMIZE HACK REVIEW contained
 syntax match   javaScriptLineComment      "\/\/.*" contains=@Spell,javaScriptCommentTodo
 syntax match   javaScriptCommentSkip      "^[ \t]*\*\($\|[ \t]\+\)"
 syntax region  javaScriptComment          start="/\*"  end="\*/" contains=@Spell,javaScriptCommentTodo
@@ -85,7 +85,7 @@ syntax region  javaScriptRegexpString     start=+/[^/*]+me=e-1 skip=+\\\\\|\\/+ 
 syntax match   javaScriptFloat          /\<-\=\%(\d\+\.\d\+\|\d\+\.\|\.\d\+\)\%([eE][+-]\=\d\+\)\=\>/
 "}}}
 "  DOM, Browser and Ajax Support   {{{
-syntax keyword javaScriptBrowserObjects           window navigator screen history location
+syntax keyword javaScriptBrowserObjects           window navigator screen history location console
 
 syntax keyword javaScriptDOMObjects               document event HTMLElement Anchor Area Base Body Button Form Frame Frameset Image Link Meta Option Select Style Table TableCell TableRow Textarea
 syntax keyword javaScriptDOMMethods               createTextNode createElement insertBefore replaceChild removeChild appendChild  hasChildNodes  cloneNode  normalize  isSupported  hasAttributes  getAttribute  setAttribute  removeAttribute  getAttributeNode  setAttributeNode  removeAttributeNode  getElementsByTagName  hasAttribute  getElementById adoptNode close compareDocumentPosition createAttribute createCDATASection createComment createDocumentFragment createElementNS createEvent createExpression createNSResolver createProcessingInstruction createRange createTreeWalker elementFromPoint evaluate getBoxObjectFor getElementsByClassName getSelection getUserData hasFocus importNode
@@ -168,7 +168,7 @@ endif
 " Function and arguments highlighting {{{
 syntax keyword javaScriptFuncKeyword     function contained
 syntax region  javaScriptFuncExp         start=/\w\+\s\==\s\=function\>/ end="\([^)]*\)" contains=javaScriptFuncEq,javaScriptFuncKeyword,javaScriptFuncArg keepend
-syntax match   javaScriptFuncArg         "\(([^()]*)\)" contains=javaScriptParens,javaScriptFuncComma contained
+syntax match   javaScriptFuncArg         "\(([^()]*)\)" contains=javaScriptParens,javaScriptFuncComma,javaScriptComment contained
 syntax match   javaScriptFuncComma       /,/ contained
 syntax match   javaScriptFuncEq          /=/ contained
 syntax region  javaScriptFuncDef         start="\<function\>" end="\([^)]*\)" contains=javaScriptFuncKeyword,javaScriptFuncArg keepend

@@ -19,8 +19,7 @@ from __future__ import unicode_literals
 from __future__ import print_function
 from __future__ import division
 from __future__ import absolute_import
-from future import standard_library
-standard_library.install_aliases()
+# Not installing aliases from python-future; it's unreliable and slow.
 from builtins import *  # noqa
 
 import ycm_core
@@ -30,12 +29,17 @@ import re
 from future.utils import PY2, native
 from ycmd import extra_conf_store
 from ycmd.utils import ( ToCppStringCompatible, OnMac, OnWindows, ToUnicode,
-                         ToBytes )
+                         ToBytes, PathsToAllParentFolders )
 from ycmd.responses import NoExtraConfDetected
 
+
+# -include-pch and --sysroot= must be listed before -include and --sysroot
+# respectively because the latter is a prefix of the former (and the algorithm
+# checks prefixes).
 INCLUDE_FLAGS = [ '-isystem', '-I', '-iquote', '-isysroot', '--sysroot',
-                  '-gcc-toolchain', '-include', '-include-pch', '-iframework',
+                  '-gcc-toolchain', '-include-pch', '-include', '-iframework',
                   '-F', '-imacros' ]
+PATH_FLAGS =  [ '--sysroot=' ] + INCLUDE_FLAGS
 
 # We need to remove --fcolor-diagnostics because it will cause shell escape
 # sequences to show up in editors, which is bad. See Valloric/YouCompleteMe#1421
@@ -59,6 +63,23 @@ FILE_FLAGS_TO_SKIP = set( [ '-MF',
 # See Valloric/ycmd#266
 CPP_COMPILER_REGEX = re.compile( r'\+\+(-\d+(\.\d+){0,2})?$' )
 
+# List of file extensions to be considered "header" files and thus not present
+# in the compilation database. The logic will try and find an associated
+# "source" file (see SOURCE_EXTENSIONS below) and use the flags for that.
+HEADER_EXTENSIONS = [ '.h', '.hxx', '.hpp', '.hh' ]
+
+# List of file extensions which are considered "source" files for the purposes
+# of heuristically locating the flags for a header file.
+SOURCE_EXTENSIONS = [ '.cpp', '.cxx', '.cc', '.c', '.m', '.mm' ]
+
+EMPTY_FLAGS = {
+  'flags': [],
+}
+
+
+class NoCompilationDatabase( Exception ):
+  pass
+
 
 class Flags( object ):
   """Keeps track of the flags necessary to compile a file.
@@ -71,83 +92,146 @@ class Flags( object ):
     self.extra_clang_flags = _ExtraClangFlags()
     self.no_extra_conf_file_warning_posted = False
 
+    # We cache the compilation database for any given source directory
+    # Keys are directory names and values are ycm_core.CompilationDatabase
+    # instances or None. Value is None when it is known there is no compilation
+    # database to be found for the directory.
+    self.compilation_database_dir_map = dict()
+
+    # Sometimes we don't actually know what the flags to use are. Rather than
+    # returning no flags, if we've previously found flags for a file in a
+    # particular directory, return them. These will probably work in a high
+    # percentage of cases and allow new files (which are not yet in the
+    # compilation database) to receive at least some flags.
+    # Keys are directory names and values are ycm_core.CompilationInfo
+    # instances. Values may not be None.
+    self.file_directory_heuristic_map = dict()
+
 
   def FlagsForFile( self,
                     filename,
                     add_extra_clang_flags = True,
                     client_data = None ):
+
+    # The try-catch here is to avoid a synchronisation primitive. This method
+    # may be called from multiple threads, and python gives us
+    # 1-python-statement synchronisation for "free" (via the GIL)
     try:
       return self.flags_for_file[ filename ]
     except KeyError:
-      module = extra_conf_store.ModuleForSourceFile( filename )
-      if not module:
-        if not self.no_extra_conf_file_warning_posted:
-          self.no_extra_conf_file_warning_posted = True
-          raise NoExtraConfDetected
-        return None
+      pass
 
-      results = _CallExtraConfFlagsForFile( module,
+    module = extra_conf_store.ModuleForSourceFile( filename )
+    try:
+      results = self._GetFlagsFromExtraConfOrDatabase( module,
+                                                       filename,
+                                                       client_data )
+    except NoCompilationDatabase:
+      if not self.no_extra_conf_file_warning_posted:
+        self.no_extra_conf_file_warning_posted = True
+        raise NoExtraConfDetected
+      return []
+
+    if not results or not results.get( 'flags_ready', True ):
+      return []
+
+    flags = _ExtractFlagsList( results )
+    if not flags:
+      return []
+
+    if add_extra_clang_flags:
+      flags += self.extra_clang_flags
+      flags = _AddMacIncludePaths( flags )
+
+    sanitized_flags = PrepareFlagsForClang( flags,
                                             filename,
-                                            client_data )
+                                            add_extra_clang_flags )
 
-      if not results or not results.get( 'flags_ready', True ):
-        return None
-
-      flags = _ExtractFlagsList( results )
-      if not flags:
-        return None
-
-      if add_extra_clang_flags:
-        flags += self.extra_clang_flags
-
-      sanitized_flags = PrepareFlagsForClang( flags,
-                                              filename,
-                                              add_extra_clang_flags )
-
-      if results.get( 'do_cache', True ):
-        self.flags_for_file[ filename ] = sanitized_flags
-      return sanitized_flags
+    if results.get( 'do_cache', True ):
+      self.flags_for_file[ filename ] = sanitized_flags
+    return sanitized_flags
 
 
-  def UserIncludePaths( self, filename, client_data ):
-    flags = [ ToUnicode( x ) for x in
-              self.FlagsForFile( filename, client_data = client_data ) ]
+  def _GetFlagsFromExtraConfOrDatabase( self, module, filename, client_data ):
+    if not module:
+      return self._GetFlagsFromCompilationDatabase( filename )
 
-    quoted_include_paths = [ os.path.dirname( filename ) ]
-    include_paths = []
-
-    if flags:
-      quote_flag = '-iquote'
-      path_flags = [ '-isystem', '-I' ]
-
-      try:
-        it = iter( flags )
-        for flag in it:
-          flag_len = len( flag )
-          if flag.startswith( quote_flag ):
-            quote_flag_len = len( quote_flag )
-            # Add next flag to the include paths if current flag equals to
-            # '-iquote', or add remaining string otherwise.
-            quoted_include_paths.append( next( it )
-                                         if flag_len == quote_flag_len
-                                         else flag[ quote_flag_len: ] )
-          else:
-            for path_flag in path_flags:
-              if flag.startswith( path_flag ):
-                path_flag_len = len( path_flag )
-                include_paths.append( next( it )
-                                      if flag_len == path_flag_len
-                                      else flag[ path_flag_len: ] )
-                break
-      except StopIteration:
-        pass
-
-    return ( [ x for x in quoted_include_paths if x ],
-             [ x for x in include_paths if x ] )
+    return _CallExtraConfFlagsForFile( module, filename, client_data )
 
 
   def Clear( self ):
     self.flags_for_file.clear()
+    self.compilation_database_dir_map.clear()
+    self.file_directory_heuristic_map.clear()
+
+
+  def _GetFlagsFromCompilationDatabase( self, file_name ):
+    file_dir = os.path.dirname( file_name )
+    file_root, file_extension = os.path.splitext( file_name )
+
+    database = self.FindCompilationDatabase( file_dir )
+    compilation_info = _GetCompilationInfoForFile( database,
+                                                   file_name,
+                                                   file_extension )
+
+    if not compilation_info:
+      # Note: Try-catch here synchronises access to the cache (as this can be
+      # called from multiple threads).
+      try:
+        # We previously saw a file in this directory. As a guess, just
+        # return the flags for that file. Hopefully this will at least give some
+        # meaningful compilation.
+        compilation_info = self.file_directory_heuristic_map[ file_dir ]
+      except KeyError:
+        # No cache for this directory and there are no flags for this file in
+        # the database.
+        return EMPTY_FLAGS
+
+    # If this is the first file we've seen in path file_dir, cache the
+    # compilation_info for it in case we see a file in the same dir with no
+    # flags available.
+    # The following updates file_directory_heuristic_map if and only if file_dir
+    # isn't already there. This works around a race condition where 2 threads
+    # could be executing this method in parallel.
+    self.file_directory_heuristic_map.setdefault( file_dir, compilation_info )
+
+    return {
+      'flags': _MakeRelativePathsInFlagsAbsolute(
+        compilation_info.compiler_flags_,
+        compilation_info.compiler_working_dir_ ),
+    }
+
+
+  # Return a compilation database object for the supplied path. Raises
+  # NoCompilationDatabase if no compilation database can be found.
+  def FindCompilationDatabase( self, file_dir ):
+    # We search up the directory hierarchy, to first see if we have a
+    # compilation database already for that path, or if a compile_commands.json
+    # file exists in that directory.
+    for folder in PathsToAllParentFolders( file_dir ):
+      # Try/catch to syncronise access to cache
+      try:
+        database = self.compilation_database_dir_map[ folder ]
+        if database:
+          return database
+
+        raise NoCompilationDatabase
+      except KeyError:
+        pass
+
+      compile_commands = os.path.join( folder, 'compile_commands.json' )
+      if os.path.exists( compile_commands ):
+        database = ycm_core.CompilationDatabase( folder )
+
+        if database.DatabaseSuccessfullyLoaded():
+          self.compilation_database_dir_map[ folder ] = database
+          return database
+
+    # Nothing was found. No compilation flags are available.
+    # Note: we cache the fact that none was found for this folder to speed up
+    # subsequent searches.
+    self.compilation_database_dir_map[ file_dir ] = None
+    raise NoCompilationDatabase
 
 
 def _ExtractFlagsList( flags_for_file_output ):
@@ -170,9 +254,23 @@ def _CallExtraConfFlagsForFile( module, filename, client_data ):
   # For the sake of backwards compatibility, we need to first check whether the
   # FlagsForFile function in the extra conf module even allows keyword args.
   if inspect.getargspec( module.FlagsForFile ).keywords:
-    return module.FlagsForFile( filename, client_data = client_data )
+    results = module.FlagsForFile( filename, client_data = client_data )
   else:
-    return module.FlagsForFile( filename )
+    results = module.FlagsForFile( filename )
+
+  results[ 'flags' ] = _MakeRelativePathsInFlagsAbsolute(
+      results[ 'flags' ],
+      results.get( 'include_paths_relative_to_dir' ) )
+
+  return results
+
+
+def _SysRootSpecifedIn( flags ):
+  for flag in flags:
+    if flag == '-isysroot' or flag.startswith( '--sysroot' ):
+      return True
+
+  return False
 
 
 def PrepareFlagsForClang( flags, filename, add_extra_clang_flags = True ):
@@ -181,8 +279,11 @@ def PrepareFlagsForClang( flags, filename, add_extra_clang_flags = True ):
   flags = _RemoveUnusedFlags( flags, filename )
   if add_extra_clang_flags:
     flags = _EnableTypoCorrection( flags )
-  flags = _SanitizeFlags( flags )
-  return flags
+
+  vector = ycm_core.StringVector()
+  for flag in flags:
+    vector.append( ToCppStringCompatible( flag ) )
+  return vector
 
 
 def _RemoveXclangFlags( flags ):
@@ -203,30 +304,6 @@ def _RemoveXclangFlags( flags ):
     sanitized_flags.append( flag )
 
   return sanitized_flags
-
-
-def _SanitizeFlags( flags ):
-  """Drops unsafe flags. Currently these are only -arch flags; they tend to
-  crash libclang."""
-
-  sanitized_flags = []
-  saw_arch = False
-  for i, flag in enumerate( flags ):
-    if flag == '-arch':
-      saw_arch = True
-      continue
-    elif flag.startswith( '-arch' ):
-      continue
-    elif saw_arch:
-      saw_arch = False
-      continue
-
-    sanitized_flags.append( flag )
-
-  vector = ycm_core.StringVector()
-  for flag in sanitized_flags:
-    vector.append( ToCppStringCompatible( flag ) )
-  return vector
 
 
 def _RemoveFlagsPrecedingCompiler( flags ):
@@ -316,23 +393,26 @@ def _RemoveUnusedFlags( flags, filename ):
   return new_flags
 
 
-# There are 2 ways to get a development enviornment (as standard) on OS X:
-#  - install XCode.app, or
-#  - install the command-line tools (xcode-select --install)
-#
-# Most users have xcode installed, but in order to be as compatible as
-# possible we consider both possible installation locations
-MAC_CLANG_TOOLCHAIN_DIRS = [
-  '/Applications/Xcode.app/Contents/Developer/Toolchains/'
-    'XcodeDefault.xctoolchain',
-  '/Library/Developer/CommandLineTools'
-]
+# Return the path to the macOS toolchain root directory to use for system
+# includes. If no toolchain is found, returns None.
+def _SelectMacToolchain():
+  # There are 2 ways to get a development enviornment (as standard) on OS X:
+  #  - install XCode.app, or
+  #  - install the command-line tools (xcode-select --install)
+  #
+  # Most users have xcode installed, but in order to be as compatible as
+  # possible we consider both possible installation locations
+  MAC_CLANG_TOOLCHAIN_DIRS = [
+    '/Applications/Xcode.app/Contents/Developer/Toolchains/'
+      'XcodeDefault.xctoolchain',
+    '/Library/Developer/CommandLineTools'
+  ]
 
+  for toolchain in MAC_CLANG_TOOLCHAIN_DIRS:
+    if _MacClangIncludeDirExists( toolchain ):
+      return toolchain
 
-# Returns a list containing the supplied path as a suffix of each of the known
-# Mac toolchains
-def _PathsForAllMacToolchains( path ):
-  return [ os.path.join( x, path ) for x in MAC_CLANG_TOOLCHAIN_DIRS ]
+  return None
 
 
 # Ultimately, this method exists only for testability
@@ -349,27 +429,27 @@ def _MacClangIncludeDirExists( candidate_include ):
   return os.path.exists( candidate_include )
 
 
-# Add in any clang headers found in the installed toolchains. These are
+# Add in any clang headers found in the supplied toolchain. These are
 # required for the same reasons as described below, but unfortuantely, these
 # are in versioned directories and there is no easy way to find the "correct"
 # version. We simply pick the highest version in the first toolchain that we
 # find, as this is the most likely to be correct.
-def _LatestMacClangIncludes():
-  for path in MAC_CLANG_TOOLCHAIN_DIRS:
-    # we use the first toolchain which actually contains any versions, rather
-    # than trying all of the toolchains and picking the highest. We
-    # favour Xcode over CommandLineTools as using Xcode is more common.
-    # It might be possible to extrace this information from xcode-select, though
-    # xcode-select -p does not point at the toolchain directly
-    candidates_dir = os.path.join( path, 'usr', 'lib', 'clang' )
-    versions = _GetMacClangVersionList( candidates_dir )
+def _LatestMacClangIncludes( toolchain ):
+  # we use the first toolchain which actually contains any versions, rather
+  # than trying all of the toolchains and picking the highest. We
+  # favour Xcode over CommandLineTools as using Xcode is more common.
+  # It might be possible to extrace this information from xcode-select, though
+  # xcode-select -p does not point at the toolchain directly
+  candidates_dir = os.path.join( toolchain, 'usr', 'lib', 'clang' )
+  versions = _GetMacClangVersionList( candidates_dir )
 
-    for version in reversed( sorted( versions ) ):
-      candidate_include = os.path.join( candidates_dir, version, 'include' )
-      if _MacClangIncludeDirExists( candidate_include ):
-        return [ candidate_include ]
+  for version in reversed( sorted( versions ) ):
+    candidate_include = os.path.join( candidates_dir, version, 'include' )
+    if _MacClangIncludeDirExists( candidate_include ):
+      return [ candidate_include ]
 
   return []
+
 
 MAC_INCLUDE_PATHS = []
 
@@ -382,25 +462,33 @@ if OnMac():
   # See the following for details:
   #  - Valloric/YouCompleteMe#303
   #  - Valloric/YouCompleteMe#2268
-  MAC_INCLUDE_PATHS = (
-    _PathsForAllMacToolchains( 'usr/include/c++/v1' ) +
-    [ '/usr/local/include' ] +
-    _PathsForAllMacToolchains( 'usr/include' ) +
-    [ '/usr/include', '/System/Library/Frameworks', '/Library/Frameworks' ] +
-    _LatestMacClangIncludes() +
-    # We include the MacOS platform SDK because some meaningful parts of the
-    # standard library are located there. If users are compiling for (say)
-    # iPhone.platform, etc. they should appear earlier in the include path.
-    [ '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/'
-      'Developer/SDKs/MacOSX.sdk/usr/include' ]
-  )
+  toolchain = _SelectMacToolchain()
+  if toolchain:
+    MAC_INCLUDE_PATHS = (
+      [ os.path.join( toolchain, 'usr/include/c++/v1' ),
+        '/usr/local/include',
+        os.path.join( toolchain, 'usr/include' ),
+        '/usr/include',
+        '/System/Library/Frameworks',
+        '/Library/Frameworks' ] +
+      _LatestMacClangIncludes( toolchain ) +
+      # We include the MacOS platform SDK because some meaningful parts of the
+      # standard library are located there. If users are compiling for (say)
+      # iPhone.platform, etc. they should appear earlier in the include path.
+      [ '/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/'
+        'Developer/SDKs/MacOSX.sdk/usr/include' ]
+    )
+
+
+def _AddMacIncludePaths( flags ):
+  if OnMac() and not _SysRootSpecifedIn( flags ):
+    for path in MAC_INCLUDE_PATHS:
+      flags.extend( [ '-isystem', path ] )
+  return flags
 
 
 def _ExtraClangFlags():
   flags = _SpecialClangIncludes()
-  if OnMac():
-    for path in MAC_INCLUDE_PATHS:
-      flags.extend( [ '-isystem', path ] )
   # On Windows, parsing of templates is delayed until instantiation time.
   # This makes GetType and GetParent commands fail to return the expected
   # result when the cursor is in a template.
@@ -437,3 +525,100 @@ def _SpecialClangIncludes():
   libclang_dir = os.path.dirname( ycm_core.__file__ )
   path_to_includes = os.path.join( libclang_dir, 'clang_includes' )
   return [ '-resource-dir=' + path_to_includes ]
+
+
+def _MakeRelativePathsInFlagsAbsolute( flags, working_directory ):
+  if not working_directory:
+    return list( flags )
+  new_flags = []
+  make_next_absolute = False
+  for flag in flags:
+    new_flag = flag
+
+    if make_next_absolute:
+      make_next_absolute = False
+      if not os.path.isabs( new_flag ):
+        new_flag = os.path.join( working_directory, flag )
+      new_flag = os.path.normpath( new_flag )
+    else:
+      for path_flag in PATH_FLAGS:
+        # Single dash argument alone, e.g. -isysroot <path>
+        if flag == path_flag:
+          make_next_absolute = True
+          break
+
+        # Single dash argument with inbuilt path, e.g. -isysroot<path>
+        # or double-dash argument, e.g. --isysroot=<path>
+        if flag.startswith( path_flag ):
+          path = flag[ len( path_flag ): ]
+          if not os.path.isabs( path ):
+            path = os.path.join( working_directory, path )
+          path = os.path.normpath( path )
+
+          new_flag = '{0}{1}'.format( path_flag, path )
+          break
+
+    if new_flag:
+      new_flags.append( new_flag )
+  return new_flags
+
+
+# Find the compilation info structure from the supplied database for the
+# supplied file. If the source file is a header, try and find an appropriate
+# source file and return the compilation_info for that.
+def _GetCompilationInfoForFile( database, file_name, file_extension ):
+  # Ask the database for the flags.
+  compilation_info = database.GetCompilationInfoForFile( file_name )
+  if compilation_info.compiler_flags_:
+    return compilation_info
+
+  # The compilation_commands.json file generated by CMake does not have entries
+  # for header files. So we do our best by asking the db for flags for a
+  # corresponding source file, if any. If one exists, the flags for that file
+  # should be good enough.
+  if file_extension in HEADER_EXTENSIONS:
+    for extension in SOURCE_EXTENSIONS:
+      replacement_file = os.path.splitext( file_name )[ 0 ] + extension
+      compilation_info = database.GetCompilationInfoForFile(
+        replacement_file )
+      if compilation_info and compilation_info.compiler_flags_:
+        return compilation_info
+
+  # No corresponding source file was found, so we can't generate any flags for
+  # this source file.
+  return None
+
+
+def UserIncludePaths( flags, filename ):
+  quoted_include_paths = [ os.path.dirname( filename ) ]
+  include_paths = []
+
+  if flags:
+    quote_flag = '-iquote'
+    path_flags = [ '-isystem', '-I' ]
+
+    try:
+      it = iter( flags )
+      for flag in it:
+        flag_len = len( flag )
+        if flag.startswith( quote_flag ):
+          quote_flag_len = len( quote_flag )
+          # Add next flag to the include paths if current flag equals to
+          # '-iquote', or add remaining string otherwise.
+          quoted_include_path = ( next( it ) if flag_len == quote_flag_len else
+                                  flag[ quote_flag_len: ] )
+          if quoted_include_path:
+            quoted_include_paths.append( ToUnicode( quoted_include_path ) )
+        else:
+          for path_flag in path_flags:
+            if flag.startswith( path_flag ):
+              path_flag_len = len( path_flag )
+              include_path = ( next( it ) if flag_len == path_flag_len else
+                               flag[ path_flag_len: ] )
+              if include_path:
+                include_paths.append( ToUnicode( include_path ) )
+              break
+    except StopIteration:
+      pass
+
+  return quoted_include_paths, include_paths

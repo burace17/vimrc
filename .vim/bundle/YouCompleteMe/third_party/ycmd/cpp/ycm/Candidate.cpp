@@ -15,41 +15,28 @@
 // You should have received a copy of the GNU General Public License
 // along with ycmd.  If not, see <http://www.gnu.org/licenses/>.
 
-#include "standard.h"
 #include "Candidate.h"
 #include "Result.h"
 
-#include <boost/algorithm/string.hpp>
-#include <cctype>
-#include <locale>
-
-using boost::algorithm::all;
-using boost::algorithm::is_lower;
-using boost::algorithm::is_print;
-
 namespace YouCompleteMe {
-
-bool IsPrintable( const std::string &text ) {
-  return all( text, is_print( std::locale::classic() ) );
-}
-
 
 std::string GetWordBoundaryChars( const std::string &text ) {
   std::string result;
 
-  for ( uint i = 0; i < text.size(); ++i ) {
-    bool is_first_char_but_not_punctuation = i == 0 && !ispunct( text[ i ] );
+  for ( size_t i = 0; i < text.size(); ++i ) {
+    bool is_first_char_but_not_punctuation = i == 0 &&
+                                             !IsPunctuation( text[ i ] );
     bool is_good_uppercase = i > 0 &&
                              IsUppercase( text[ i ] ) &&
                              !IsUppercase( text[ i - 1 ] );
     bool is_alpha_after_punctuation = i > 0 &&
-                                      ispunct( text[ i - 1 ] ) &&
-                                      isalpha( text[ i ] );
+                                      IsPunctuation( text[ i - 1 ] ) &&
+                                      IsAlpha( text[ i ] );
 
     if ( is_first_char_but_not_punctuation ||
          is_good_uppercase ||
          is_alpha_after_punctuation ) {
-      result.push_back( tolower( text[ i ] ) );
+      result.push_back( Lowercase( text[ i ] ) );
     }
   }
 
@@ -60,10 +47,10 @@ std::string GetWordBoundaryChars( const std::string &text ) {
 Bitset LetterBitsetFromString( const std::string &text ) {
   Bitset letter_bitset;
 
-  foreach ( char letter, text ) {
+  for ( char letter : text ) {
     int letter_index = IndexForLetter( letter );
 
-    if ( IsInAsciiRange( letter_index ) )
+    if ( IsAscii( letter_index ) )
       letter_bitset.set( letter_index );
   }
 
@@ -74,8 +61,9 @@ Bitset LetterBitsetFromString( const std::string &text ) {
 Candidate::Candidate( const std::string &text )
   :
   text_( text ),
+  case_swapped_text_( SwapCase( text ) ),
   word_boundary_chars_( GetWordBoundaryChars( text ) ),
-  text_is_lowercase_( all( text, is_lower() ) ),
+  text_is_lowercase_( IsLowercase( text ) ),
   letters_present_( LetterBitsetFromString( text ) ),
   root_node_( new LetterNode( text ) ) {
 }
@@ -86,12 +74,12 @@ Result Candidate::QueryMatchResult( const std::string &query,
   LetterNode *node = root_node_.get();
   int index_sum = 0;
 
-  foreach ( char letter, query ) {
+  for ( char letter : query ) {
     const NearestLetterNodeIndices *nearest =
       node->NearestLetterNodesForLetter( letter );
 
     if ( !nearest )
-      return Result( false );
+      return Result();
 
     // When the query letter is uppercase, then we force an uppercase match
     // but when the query letter is lowercase, then it can match both an
@@ -107,13 +95,13 @@ Result Candidate::QueryMatchResult( const std::string &query,
     }
 
     if ( !node )
-      return Result( false );
+      return Result();
 
     index_sum += node->Index();
   }
 
-  return Result( true, &text_, text_is_lowercase_, index_sum,
-                 word_boundary_chars_, query );
+  return Result( true, &text_, &case_swapped_text_, text_is_lowercase_,
+                 index_sum, word_boundary_chars_, query );
 }
 
 } // namespace YouCompleteMe

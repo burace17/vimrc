@@ -56,6 +56,27 @@ endif()
 
 #############################################################################
 
+# Linux distribution detection.
+
+# Red Hat and CentOS detection.
+if ( EXISTS /etc/redhat-release )
+  file( READ /etc/redhat-release CONTENTS )
+  if ( CONTENTS MATCHES "Red Hat" )
+    set( DISTRIBUTION "Red Hat" )
+  elseif ( CONTENTS MATCHES "CentOS" )
+    set( DISTRIBUTION "CentOS" )
+  endif()
+# Gentoo detection. Needed because Gentoo is a special snowflake that puts
+# llvm in weird places.
+elseif ( EXISTS /etc/os-release )
+  file( READ /etc/os-release CONTENTS )
+  if ( CONTENTS MATCHES "Gentoo" )
+    set( DISTRIBUTION "Gentoo" )
+  endif()
+endif()
+
+#############################################################################
+
 # Turning on this flag tells cmake to emit a compile_commands.json file.
 # This file can be used to load compilation flags into YCM. See here for more
 # details: http://clang.llvm.org/docs/JSONCompilationDatabase.html
@@ -115,23 +136,27 @@ endif()
 # Determining the presence of C++11 support in the compiler
 set( CPP11_AVAILABLE false )
 if ( CMAKE_COMPILER_IS_GNUCXX )
-  execute_process(
-    COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
-  if ( GCC_VERSION VERSION_GREATER 4.6 OR GCC_VERSION VERSION_EQUAL 4.6 )
+  if ( NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.8 )
     set( CPP11_AVAILABLE true )
   endif()
 elseif( COMPILER_IS_CLANG )
-  set( CPP11_AVAILABLE true )
-  set( CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD "c++11" )
-  set( CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY "libc++" )
+  if ( NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 3.3 )
+    set( CPP11_AVAILABLE true )
+    set( CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD "c++11" )
+    set( CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY "libc++" )
+  endif()
+elseif( MSVC )
+  if ( NOT MSVC_VERSION LESS 1800 )
+    set( CPP11_AVAILABLE true )
+  endif()
 endif()
 
 #############################################################################
 
 # For MSVC enable UNICODE and compilation on multiple processors
 if ( MSVC )
-  add_definitions( /DUNICODE /D_UNICODE /Zc:wchar_t-  )
-	set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP" )
+  add_definitions( /DUNICODE /D_UNICODE /Zc:wchar_t- )
+  set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP" )
 endif()
 
 # Solves the conflict in names of hypot in python sources and boost::python
@@ -139,55 +164,65 @@ if ( MINGW )
   set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cmath")
 endif()
 
-# Due to a bug/misconfiguration/stupidity, boost 1.52 and libc++ don't like each
-# other much: a compilation error "Constexpr function never produces a constant
-# expression" pops up when trying to compile anything that uses
-# boost/chrono/duration.hpp (namely boost/thread for us). This is a workaround
-# that prevents this from happening. Also present in cpp/BoostParts/CMakeLists.txt.
-# See here for more details: https://svn.boost.org/trac/boost/ticket/7671
-# TODO: remove this when it's fixed upstream (probably boost 1.53).
-add_definitions( -DBOOST_THREAD_DONT_USE_CHRONO )
 
-if( MSVC OR CYGWIN )
+if( MSVC OR CYGWIN OR MSYS)
   # BOOST_ALL_NO_LIB turns off MSVC library autolinking
   add_definitions( -DBOOST_ALL_NO_LIB )
 endif()
 
-if( WIN32 OR CYGWIN )
+if( WIN32 OR CYGWIN OR MSYS)
   # BOOST_PYTHON_SOURCE makes boost use the correct __declspec
   add_definitions( -DBOOST_PYTHON_SOURCE -DBOOST_THREAD_USE_LIB )
-  if ( 64_BIT_PLATFORM )
-    # Enables python compilation for 64-bit Windows
+  if ( NOT MSVC AND 64_BIT_PLATFORM )
+      # Enables Python compilation for 64-bit Windows. Already defined by Python
+      # headers when compiling with MSVC.
     add_definitions( -DMS_WIN64 )
   endif()
 endif()
 
 #############################################################################
 
-# When used with Clang, adding the -std=c++0x flag to CMAKE_CXX_FLAGS will cause
+# When used with Clang, adding the -std=c++11 flag to CMAKE_CXX_FLAGS will cause
 # the compiler to output a warning during linking:
-#  clang: warning: argument unused during compilation: '-std=c++0x'
+#  clang: warning: argument unused during compilation: '-std=c++11'
 # This is caused by cmake passing this flag to the linking stage which it
 # shouldn't do. It's ignored so it does no harm, but the warning is annoying.
 #
 # Putting the flag in add_definitions() works around the issue, even though it
 # shouldn't in theory go there.
 if ( CPP11_AVAILABLE )
-  message( "Your C++ compiler supports C++11, compiling in that mode." )
-
   # Cygwin needs its hand held a bit; see issue #473
   if ( CYGWIN AND CMAKE_COMPILER_IS_GNUCXX )
-    add_definitions( -std=gnu++0x )
-  else()
-    add_definitions( -std=c++0x )
+    add_definitions( -std=gnu++11 )
+  elseif( NOT MSVC )
+    add_definitions( -std=c++11 )
   endif()
 else()
-  message(
-    "Your C++ compiler does NOT support C++11, compiling in C++03 mode." )
+  # Platform-specific advice goes here. In particular, we have plenty of users
+  # in corporate environments on RHEL/CentOS, where the default system compiler
+  # is too old.
+
+  # on RHEL and CentOS, users require the devtoolset-3 or greater. However, we
+  # recommended the devtoolset-6 because it is the newest at the time of
+  # writing. And why not.
+  if ( DISTRIBUTION STREQUAL "CentOS" OR DISTRIBUTION STREQUAL "Red Hat" )
+    message( STATUS "NOTE: You appear to be on ${DISTRIBUTION}. "
+    "In order to use this application, you require a more modern compiler "
+    "than the default compiler on this platform. "
+    "Please install the devtoolset-6 or greater. For example, see this link: "
+    "https://www.softwarecollections.org/en/scls/rhscl/devtoolset-6/" )
+
+    # Finally, just check if it is installed and they just need to activate it.
+    if ( EXISTS /opt/rh/devtoolset-6 )
+      message( STATUS "NOTE: It looks like you have the devtoolset-6 "
+                      "installed in /opt/rh/devtoolset-6, so you probably "
+                      "just need to activate it and re-run the installation. "
+                      "For example: source /opt/rh/devtoolset-6/enable")
+    endif()
+  endif()
+
+  message( FATAL_ERROR "Your C++ compiler does NOT fully support C++11." )
 endif()
-
-
-#############################################################################
 
 # Note: build.py always explicitly sets this option, so the default used here
 # rarely matters.

@@ -21,19 +21,13 @@
 #include "DLLDefines.h"
 #include "LetterNode.h"
 
-#include <boost/scoped_ptr.hpp>
-#include <boost/utility.hpp>
-
+#include <memory>
 #include <string>
 #include <bitset>
 
 namespace YouCompleteMe {
 
 class Result;
-
-// Returns true if text contains only printable characters: ASCII characters in
-// the range 32-126.
-bool IsPrintable( const std::string &text );
 
 typedef std::bitset< NUM_LETTERS > Bitset;
 
@@ -42,10 +36,13 @@ YCM_DLL_EXPORT Bitset LetterBitsetFromString( const std::string &text );
 // Public for tests
 YCM_DLL_EXPORT std::string GetWordBoundaryChars( const std::string &text );
 
-class Candidate : boost::noncopyable {
+class Candidate {
 public:
 
   YCM_DLL_EXPORT explicit Candidate( const std::string &text );
+  // Make class noncopyable
+  Candidate( const Candidate& ) = delete;
+  Candidate& operator=( const Candidate& ) = delete;
 
   inline const std::string &Text() const {
     return text_;
@@ -62,10 +59,11 @@ public:
 
 private:
   std::string text_;
+  std::string case_swapped_text_;
   std::string word_boundary_chars_;
   bool text_is_lowercase_;
   Bitset letters_present_;
-  boost::scoped_ptr< LetterNode > root_node_;
+  const std::unique_ptr< LetterNode > root_node_;
 };
 
 } // namespace YouCompleteMe
