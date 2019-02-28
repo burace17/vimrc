@@ -1,4 +1,4 @@
-# Copyright (C) 2013 Google Inc.
+# Copyright (C) 2013-2018 ycmd contributors
 #
 # This file is part of ycmd.
 #
@@ -24,11 +24,10 @@ from builtins import *  # noqa
 
 # Must not import ycm_core here! Vim imports completer, which imports this file.
 # We don't want ycm_core inside Vim.
-import os
-import re
 from collections import defaultdict
 from future.utils import iteritems
-from ycmd.utils import ToCppStringCompatible, ToUnicode, ReadFile
+from ycmd.utils import ( LOGGER, ToCppStringCompatible, ToUnicode, re, ReadFile,
+                         SplitLines )
 
 
 class PreparedTriggers( object ):
@@ -39,8 +38,8 @@ class PreparedTriggers( object ):
     final_triggers = _FiletypeDictUnion( PREPARED_DEFAULT_FILETYPE_TRIGGERS,
                                          user_prepared_triggers )
     if filetype_set:
-      final_triggers = dict( ( k, v ) for k, v in iteritems( final_triggers )
-                             if k in filetype_set )
+      final_triggers = { k: v for k, v in iteritems( final_triggers )
+                         if k in filetype_set }
 
     self._filetype_to_prepared_triggers = final_triggers
 
@@ -154,19 +153,6 @@ def _PrepareTrigger( trigger ):
   return re.compile( re.escape( trigger ), re.UNICODE )
 
 
-def _PathToCompletersFolder():
-  dir_of_current_script = os.path.dirname( os.path.abspath( __file__ ) )
-  return os.path.join( dir_of_current_script )
-
-
-def PathToFiletypeCompleterPluginLoader( filetype ):
-  return os.path.join( _PathToCompletersFolder(), filetype, 'hook.py' )
-
-
-def FiletypeCompleterExistsForFiletype( filetype ):
-  return os.path.exists( PathToFiletypeCompleterPluginLoader( filetype ) )
-
-
 def FilterAndSortCandidatesWrap( candidates, sort_property, query,
                                  max_candidates ):
   from ycm_core import FilterAndSortCandidates
@@ -189,7 +175,7 @@ TRIGGER_REGEX_PREFIX = 're!'
 
 DEFAULT_FILETYPE_TRIGGERS = {
   'c' : [ '->', '.' ],
-  'objc' : [
+  'objc,objcpp' : [
     '->',
     '.',
     r're!\[[_a-zA-Z]+\w*\s',    # bracketed calls
@@ -197,12 +183,22 @@ DEFAULT_FILETYPE_TRIGGERS = {
     r're!\[.*\]\s',             # method composition
   ],
   'ocaml' : [ '.', '#' ],
-  'cpp,objcpp' : [ '->', '.', '::' ],
+  'cpp,cuda,objcpp' : [ '->', '.', '::' ],
   'perl' : [ '->' ],
   'php' : [ '->', '::' ],
-  'cs,java,javascript,typescript,d,python,perl6,scala,vb,elixir,go,groovy' : [
-    '.'
-  ],
+  ( 'cs,'
+    'd,'
+    'elixir,'
+    'go,'
+    'groovy,'
+    'java,'
+    'javascript,'
+    'julia,'
+    'perl6,'
+    'python,'
+    'scala,'
+    'typescript,'
+    'vb' ) : [ '.' ],
   'ruby,rust' : [ '.', '::' ],
   'lua' : [ '.', ':' ],
   'erlang' : [ ':' ],
@@ -222,4 +218,16 @@ def GetFileContents( request_data, filename ):
   if filename in file_data:
     return ToUnicode( file_data[ filename ][ 'contents' ] )
 
-  return ToUnicode( ReadFile( filename ) )
+  try:
+    return ToUnicode( ReadFile( filename ) )
+  except IOError:
+    LOGGER.exception( 'Error reading file %s', filename )
+    return ''
+
+
+def GetFileLines( request_data, filename ):
+  """Like GetFileContents but return the contents as a list of lines. Avoid
+  splitting the lines if they have already been split for the current file."""
+  if filename == request_data[ 'filepath' ]:
+    return request_data[ 'lines' ]
+  return SplitLines( GetFileContents( request_data, filename ) )

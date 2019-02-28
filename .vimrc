@@ -1,7 +1,7 @@
 syntax on
 set nocompatible ruler laststatus=2 showcmd showmode number
 set incsearch ignorecase smartcase hlsearch wildmenu cmdheight=2 
-set background=dark showmatch shiftwidth=4 tabstop=4 t_Co=256
+set background=dark showmatch shiftwidth=4 noexpandtab tabstop=4 t_Co=256
 set guifont=Monospace\ 12
 
 " Pathogen
@@ -17,7 +17,6 @@ Plugin 'scrooloose/syntastic' " Syntax checking
 Plugin 'jelera/vim-javascript-syntax' " Better JS Syntax
 Plugin 'tomtom/tcomment_vim' " comment out shortcut
 Plugin 'flazz/vim-colorschemes' " A bunch of color schemes
-Plugin 'zah/nimrod.vim' " Syntax highlighting for nim
 Plugin 'Valloric/YouCompleteMe'
 Plugin 'wlangstroth/vim-racket'
 call vundle#end()
@@ -40,19 +39,6 @@ function! HasPaste()
     en
     return ''
 endfunction
-
-" Stuff for nim syntax highlighting
-fun! JumpToDef()
-	if exists("*GotoDefinition_" . &filetype)
-		call GotoDefinition_{&filetype}()
-	else
-		exe "norm! \<C-]>"
-	endif
-endf
-
-nn <M-g> :call JumpToDef()<cr>
-ino <M-g> <esc>:call JumpToDef()<cr>i
-" end 
 
 " Drag visuals plugin
 runtime plugin/dragvisuals.vim

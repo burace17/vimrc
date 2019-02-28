@@ -1,4 +1,4 @@
-// Copyright (C) 2011, 2012 Google Inc.
+// Copyright (C) 2011-2018 ycmd contributors
 //
 // This file is part of ycmd.
 //
@@ -20,23 +20,28 @@
 
 #include "ClangUtils.h"
 
-#include <string>
 #include <clang-c/Index.h>
+#include <string>
 
 namespace YouCompleteMe {
 
 struct Location {
   // Creates an invalid location
-  Location() : line_number_( 0 ), column_number_( 0 ), filename_( "" ) {}
+  Location()
+    : line_number_( 0 ),
+      column_number_( 0 ),
+      filename_( "" ) {
+  }
 
   Location( const std::string &filename,
             unsigned int line,
             unsigned int column )
     : line_number_( line ),
       column_number_( column ),
-      filename_( filename ) {}
+      filename_( filename ) {
+  }
 
-  Location( const CXSourceLocation &location ) {
+  explicit Location( const CXSourceLocation &location ) {
     CXFile file;
     unsigned int unused_offset;
     clang_getExpansionLocation( location,
@@ -53,7 +58,7 @@ struct Location {
            filename_ == other.filename_;
   }
 
-  bool IsValid() {
+  bool IsValid() const {
     return !filename_.empty();
   }
 
